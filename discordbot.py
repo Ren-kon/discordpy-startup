@@ -5,63 +5,95 @@ import os
 
 client = commands.Bot(command_prefix='!')
 
-@client.event
-async def on_error(ctx,message):
-    pass
+@bot.command(name='eval')
+async def _eval(ctx, *, body):
+    """Evaluates python code"""
+    env = {
+        'ctx': ctx,
+        'bot': bot,
+        'channel': ctx.channel,
+        'author': ctx.author,
+        'guild': ctx.guild,
+        'message': ctx.message,
+        'source': inspect.getsource
+    }
 
-@client.event
-async def on_ready():
-    client.ch = client.get_channel(1) #channel.id
-    await client.ch.send("..atk")
+    def cleanup_code(content):
+        """Automatically removes code blocks from the code."""
+        # remove ```py\n```
+        if content.startswith('```') and content.endswith('```'):
+            return '\n'.join(content.split('\n')[1:-1])
 
-def battle_check(m):
-    if not m.embeds:
-        return 0
-    if not m.embeds[0].title:
-        return 0
-    return "待ち構えている" in m.embeds[0].title
+        # remove `foo`
+        return content.strip('` \n')
 
-@client.event
-async def on_message(msg):
-    ch = msg.channel
-    if ch.id == 1: #channel.id
-        if msg.author.id == 567999794879135745:
+    def get_syntax_error(e):
+        if e.text is None:
+            return f'```py\n{e.__class__.__name__}: {e}\n```'
+        return f'```py\n{e.text}{"^":>{e.offset}}\n{e.__class__.__name__}: {e}```'
 
-            if battle_check(msg):
-                await asyncio.sleep(3) 
-                await ch.send("..i kn")
+    env.update(globals())
+
+    body = cleanup_code(body)
+    stdout = io.StringIO()
+    err = out = None
+
+    to_compile = f'async def func():\n{textwrap.indent(body, "  ")}'
+
+    def paginate(text: str):
+        '''Simple generator that paginates text.'''
+        last = 0
+        pages = []
+        for curr in range(0, len(text)):
+            if curr % 1980 == 0:
+                pages.append(text[last:curr])
+                last = curr
+                appd_index = curr
+        if appd_index != len(text)-1:
+            pages.append(text[last:curr])
+        return list(filter(lambda a: a != '', pages))
+    
+    try:
+        exec(to_compile, env)
+    except Exception as e:
+        err = await ctx.send(f'```py\n{e.__class__.__name__}: {e}\n```')
+        return await ctx.message.add_reaction('\u2049')
+
+    func = env['func']
+    try:
+        with redirect_stdout(stdout):
+            ret = await func()
+    except Exception as e:
+        value = stdout.getvalue()
+        err = await ctx.send(f'```py\n{value}{traceback.format_exc()}\n```')
+    else:
+        value = stdout.getvalue()
+        if ret is None:
+            if value:
                 try:
-                    await client.wait_for('message', timeout=5)
-                except TimeoutError:
-                    await ch.send('..atk')
+                    
+                    out = await ctx.send(f'```py\n{value}\n```')
+                except:
+                    paginated_text = paginate(value)
+                    for page in paginated_text:
+                        if page == paginated_text[-1]:
+                            out = await ctx.send(f'```py\n{page}\n```')
+                            break
+                        await ctx.send(f'```py\n{page}\n```')
+        else:
+            try:
+                out = await ctx.send(f'```py\n{value}{ret}\n```')
+            except:
+                paginated_text = paginate(f"{value}{ret}")
+                for page in paginated_text:
+                    if page == paginated_text[-1]:
+                        out = await ctx.send(f'```py\n{page}\n```')
+                        break
+                    await ctx.send(f'```py\n{page}\n```')
 
-            if "攻撃失敗" in msg.content:
-                await ch.send("..atk")
-
-            if "アイテム使用失敗" in msg.content:
-                await ch.send("..i e")
-
-            if "既に戦闘中" in msg.content:
-                await asyncio.sleep(10)
-                await ch.send('..atk')
-                try:
-                    await client.wait_for('message', timeout=10)
-                except TimeoutError:
-                    await ch.send('..atk')
-
-            if "全回復" in msg.content:
-                await ch.send('..atk')
-
-            if "やられている！" in msg.content:
-                await ch.send("..i e")
-
-            em = msg.embeds[0]
-            if "Ren-testのHP" in em.description:
-                await ch.send("..atk")
-
-            else:
-
-                if "HP" in message.embed.description: 
-                    await message.channel.send("..atk")
-
-client.run('Njg0NTc0NjIwNzI0MTAxMTMy.Xmjp9g.KFa6T33ebbv-QgzMYc-OxsPft3Y') 
+    if out:
+        await ctx.message.add_reaction('\u2705')  # tick
+    elif err:
+        await ctx.message.add_reaction('\u2049')  # x
+    else:
+        await ctx.message.add_reaction('\u2705')
